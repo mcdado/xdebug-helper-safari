@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const extensionApi = globalThis.XdebugExtension;
     const optionsForm = document.querySelector('form');
     const debugTriggerInput = document.getElementById('debugtrigger');
     const traceTriggerInput = document.getElementById('tracetrigger');
@@ -6,7 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const helpDiv = document.getElementById('help');
 
     document.querySelectorAll('[data-locale]').forEach(e => {
-        e.innerText = chrome.i18n.getMessage(e.dataset.locale)
+        e.innerText = extensionApi.getMessage(e.dataset.locale)
     });
 
     document.querySelector('button[type="reset"]').addEventListener('click', e => {
@@ -16,28 +17,34 @@ document.addEventListener('DOMContentLoaded', () => {
         profileTriggerInput.value = '';
     });
 
-    document.querySelector('button[type="submit"]').addEventListener('click', e => {
+    document.querySelector('button[type="submit"]').addEventListener('click', async e => {
         e.preventDefault();
-        chrome.storage.local.set({
-            xdebugDebugTrigger: debugTriggerInput.value,
-            xdebugTraceTrigger: traceTriggerInput.value,
-            xdebugProfileTrigger: profileTriggerInput.value
-        });
-        optionsForm.classList.add('success');
-        setTimeout(() => optionsForm.classList.remove('success'), 1500);
+        try {
+            await extensionApi.storageLocalSet({
+                xdebugDebugTrigger: debugTriggerInput.value,
+                xdebugTraceTrigger: traceTriggerInput.value,
+                xdebugProfileTrigger: profileTriggerInput.value
+            });
+            optionsForm.classList.add('success');
+            setTimeout(() => optionsForm.classList.remove('success'), 1500);
+        } catch (error) {
+            console.log('Error saving options:', error);
+        }
     });
 
-    chrome.storage.local.get({
+    extensionApi.storageLocalGet({
         xdebugDebugTrigger: 'YOUR-NAME',
         xdebugTraceTrigger: null,
         xdebugProfileTrigger: null,
-    }, (settings) => {
+    }).then((settings) => {
         debugTriggerInput.value = settings.xdebugDebugTrigger;
         traceTriggerInput.value = settings.xdebugTraceTrigger;
         profileTriggerInput.value = settings.xdebugProfileTrigger;
+    }).catch((error) => {
+        console.log('Error loading options:', error);
     });
 
-    chrome.commands.getAll((commands) => {
+    extensionApi.commandsGetAll().then((commands) => {
         helpDiv.querySelectorAll('p').forEach(p => p.remove());
 
         if (commands.length === 0) {
@@ -62,8 +69,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            newP.appendChild(document.createTextNode(' ' + (description || chrome.i18n.getMessage("options_execute_action"))));
+            newP.appendChild(document.createTextNode(' ' + (description || extensionApi.getMessage("options_execute_action"))));
             helpDiv.appendChild(newP);
         }
+    }).catch((error) => {
+        console.log('Error loading commands:', error);
     });
 });

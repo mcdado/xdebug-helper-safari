@@ -54,7 +54,7 @@ mv "$TMP_XPI_DIR/manifest.json.tmp" "$TMP_XPI_DIR/manifest.json"
 echo "Added browser-specific settings to Firefox manifest"
 
 # Modify for Firefox background script compatibility:
-if ! jq --indent 4 'del(.background.service_worker) + {background: {scripts: ["service_worker.js"]}}' "$TMP_XPI_DIR/manifest.json" > "$TMP_XPI_DIR/manifest.json.tmp"; then
+if ! jq --indent 4 'del(.background.service_worker) + {background: {scripts: ["extension-api.js", "service_worker.js"]}}' "$TMP_XPI_DIR/manifest.json" > "$TMP_XPI_DIR/manifest.json.tmp"; then
     echo "Failed to update Firefox background script in manifest"
     exit 1
 fi

@@ -1,0 +1,8 @@
+{
+    "name": "xdebug-helper-safari",
+    "version": "1.0.3",
+    "private": true,
+    "scripts": {
+        "test": "node --test test/*.node.test.js"
+    }
+}

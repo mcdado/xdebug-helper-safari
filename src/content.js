@@ -1,30 +1,40 @@
 const DEFAULT_TRIGGER_VALUE = 'YOUR-NAME';
+const extensionApi = globalThis.XdebugExtension;
 
 const getCookie = (name) => {
     const cookie = document.cookie.split(';').find((c) => c.trim().startsWith(`${name}=`));
-    return cookie ? decodeURIComponent(cookie.split('=')[1]) : null;
+    if (!cookie) {
+        return null;
+    }
+
+    return decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1));
 };
 
 const setCookie = (name, value, days = 365) => {
     const domain = getDomainForCookie();
     const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
-    let cookie = `${name}=${encodeURIComponent(value)};expires=${expires};path=/`;
+    const encodedValue = value === null ? '' : encodeURIComponent(value);
+    let cookie = `${name}=${encodedValue};expires=${expires};path=/`;
     if (domain) {
         cookie += `;domain=${domain}`;
     }
     document.cookie = cookie;
 };
 
+const requiresHostOnlyCookie = (hostname) => {
+    const normalizedHostname = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+
+    return normalizedHostname === ''
+        || normalizedHostname === 'localhost'
+        || !normalizedHostname.includes('.')
+        || /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(normalizedHostname)
+        || normalizedHostname.includes(':');
+};
+
 const getDomainForCookie = () => {
     const hostname = window.location.hostname;
 
-    // IP addresses should use host-only cookies (no domain attribute)
-    if (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname)) {
-        return null;
-    }
-
-    // localhost should also ideally be host-only as domain=localhost is often rejected
-    if (hostname === 'localhost') {
+    if (requiresHostOnlyCookie(hostname)) {
         return null;
     }
 
@@ -35,7 +45,7 @@ const getDomainForCookie = () => {
     for (let i = parts.length - 1; i >= 0; i--) {
         const domain = parts.slice(i).join('.');
 
-        if (parts.length > 1 && i === parts.length - 1 && domain !== 'localhost') {
+        if (parts.length > 1 && i === parts.length - 1) {
             continue;
         }
 
@@ -62,61 +72,59 @@ const getStatusMap = (settings) => {
 };
 
 const getCurrentStatus = () => {
-    return new Promise((resolve) => {
-        chrome.storage.local.get({
-            xdebugDebugTrigger: DEFAULT_TRIGGER_VALUE,
-            xdebugTraceTrigger: DEFAULT_TRIGGER_VALUE,
-            xdebugProfileTrigger: DEFAULT_TRIGGER_VALUE
-        }, (settings) => {
-            const statusMap = getStatusMap(settings);
-            for (const [idx, { name, trigger }] of Object.entries(statusMap)) {
-                if (getCookie(name) === trigger) {
-                    resolve(+idx);
-                    return;
-                }
+    return extensionApi.storageLocalGet({
+        xdebugDebugTrigger: DEFAULT_TRIGGER_VALUE,
+        xdebugTraceTrigger: DEFAULT_TRIGGER_VALUE,
+        xdebugProfileTrigger: DEFAULT_TRIGGER_VALUE
+    }).then((settings) => {
+        const statusMap = getStatusMap(settings);
+        for (const [idx, { name, trigger }] of Object.entries(statusMap)) {
+            if (getCookie(name) === trigger) {
+                return +idx;
             }
+        }
 
-            resolve(0);
-        });
+        return 0;
     });
 };
 
 const setStatus = status => {
-    return new Promise((resolve) => {
-        chrome.storage.local.get({
-            xdebugDebugTrigger: DEFAULT_TRIGGER_VALUE,
-            xdebugTraceTrigger: DEFAULT_TRIGGER_VALUE,
-            xdebugProfileTrigger: DEFAULT_TRIGGER_VALUE
-        }, (settings) => {
-            const statusMap = getStatusMap(settings);
-            for (const { name } of Object.values(statusMap)) {
-                setCookie(name, null, -1); // Delete existing cookies
-            }
+    return extensionApi.storageLocalGet({
+        xdebugDebugTrigger: DEFAULT_TRIGGER_VALUE,
+        xdebugTraceTrigger: DEFAULT_TRIGGER_VALUE,
+        xdebugProfileTrigger: DEFAULT_TRIGGER_VALUE
+    }).then((settings) => {
+        const statusMap = getStatusMap(settings);
+        for (const { name } of Object.values(statusMap)) {
+            setCookie(name, null, -1); // Delete existing cookies
+        }
 
-            if (status > 0 && statusMap[status]) {
-                const { name, trigger } = statusMap[status];
-                setCookie(name, trigger);
-            }
+        if (status > 0 && statusMap[status]) {
+            const { name, trigger } = statusMap[status];
+            setCookie(name, trigger);
+        }
 
-            resolve();
-        });
+        return undefined;
     });
 };
 
 // Listens for messages from the background script
-chrome.runtime.onMessage.addListener((msg, _, res) => {
+extensionApi.onRuntimeMessage((msg) => {
     switch (msg.cmd) {
         case 'getStatus':
-            getCurrentStatus().then(status => res({ status }));
-            return true;
+            return getCurrentStatus().then(status => ({ status }));
         case 'setStatus':
-            setStatus(msg.status).then(() => res({ status: msg.status }));
-            return true;
+            return setStatus(msg.status).then(() => ({ status: msg.status }));
         case 'getDomain':
-            res({ domain: getDomainForCookie() });
-            return true;
+            return { domain: getDomainForCookie() };
         default:
-            res({ status: 0 });
-            return true;
+            return { status: 0 };
     }
 });
+
+globalThis.XdebugContent = {
+    getCookie,
+    setCookie,
+    getDomainForCookie,
+    requiresHostOnlyCookie,
+};

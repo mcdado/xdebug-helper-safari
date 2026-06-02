@@ -25,6 +25,7 @@
                 "https://*/*"
             ],
             "js": [
+                "extension-api.js",
                 "content.js"
             ]
         }

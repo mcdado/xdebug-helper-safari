@@ -1,24 +1,21 @@
+if (!globalThis.XdebugExtension && typeof importScripts === 'function') {
+    importScripts('extension-api.js');
+}
+
 const DEFAULT_TRIGGER_VALUE = 'YOUR-NAME';
+const extensionApi = globalThis.XdebugExtension;
 
 const getSettings = async () => {
-    return new Promise((resolve, reject) => {
-        chrome.storage.local.get({
-            xdebugDebugTrigger: DEFAULT_TRIGGER_VALUE,
-            xdebugTraceTrigger: DEFAULT_TRIGGER_VALUE,
-            xdebugProfileTrigger: DEFAULT_TRIGGER_VALUE
-        }, (settings) => {
-            if (chrome.runtime.lastError) {
-                return reject(new Error(chrome.runtime.lastError));
-            }
-            resolve(settings);
-        });
+    return extensionApi.storageLocalGet({
+        xdebugDebugTrigger: DEFAULT_TRIGGER_VALUE,
+        xdebugTraceTrigger: DEFAULT_TRIGGER_VALUE,
+        xdebugProfileTrigger: DEFAULT_TRIGGER_VALUE
     });
 };
 
 const getTab = async () => {
     try {
-        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-        return tab;
+        return await extensionApi.getActiveTab({ active: true, lastFocusedWindow: true });
     } catch (error) {
         console.log('Error getting active tab:', error);
         return null;
@@ -26,29 +23,17 @@ const getTab = async () => {
 };
 
 const updateIcon = (status, tabId) => {
-    const iconInfo = {
-        0: { title: 'Disabled', image: 'img/disable32.png' },
-        1: { title: 'Debugging', image: 'img/debug32.png' },
-        2: { title: 'Profiling', image: 'img/profile32.png' },
-        3: { title: 'Tracing', image: 'img/trace32.png' }
-    }[status] || iconInfo[0];
-    if (typeof chrome !== 'undefined' && chrome.action) {
-        chrome.action.setTitle({ tabId, title: iconInfo.title });
-        chrome.action.setIcon({ tabId, path: iconInfo.image });
-    } else if (typeof browser !== 'undefined' && browser.pageAction) {
-        browser.pageAction.setTitle({ tabId, title: iconInfo.title });
-        browser.pageAction.setIcon({ tabId: tabId, path: iconInfo.image });
-    }
+    return extensionApi.setActionState(status, tabId);
 };
 
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+extensionApi.onTabsUpdated(async (tabId, changeInfo, tab) => {
     if ((changeInfo?.status || tab?.status) !== 'complete') {
         return;
     }
 
     try {
         const { xdebugDebugTrigger, xdebugTraceTrigger, xdebugProfileTrigger } = await getSettings();
-        const response = await chrome.tabs.sendMessage(tabId, {
+        const response = await extensionApi.tabsSendMessage(tabId, {
             cmd: 'getStatus',
             debugTrigger: xdebugDebugTrigger,
             traceTrigger: xdebugTraceTrigger,
@@ -61,7 +46,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
 });
 
-chrome.commands.onCommand.addListener(async (command) => {
+extensionApi.onCommand(async (command) => {
     try {
         const tab = await getTab();
         if (!tab) {
@@ -69,7 +54,7 @@ chrome.commands.onCommand.addListener(async (command) => {
         }
 
         const settings = await getSettings();
-        const response = await chrome.tabs.sendMessage(tab.id, {
+        const response = await extensionApi.tabsSendMessage(tab.id, {
             cmd: 'getStatus',
             debugTrigger: settings.xdebugDebugTrigger,
             traceTrigger: settings.xdebugTraceTrigger,
@@ -92,7 +77,7 @@ chrome.commands.onCommand.addListener(async (command) => {
                 return; // Ignore unknown commands
         }
 
-        const setResponse = await chrome.tabs.sendMessage(tab.id, {
+        const setResponse = await extensionApi.tabsSendMessage(tab.id, {
             cmd: 'setStatus',
             status: newState,
             debugTrigger: settings.xdebugDebugTrigger,
@@ -105,36 +90,40 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
 });
 
-chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
+const setActiveTabStatus = async (status) => {
+    const settings = await getSettings();
+    const tab = await getTab();
+    if (!tab) {
+        return { status };
+    }
+
+    const response = await extensionApi.tabsSendMessage(tab.id, {
+        cmd: 'setStatus',
+        status,
+        debugTrigger: settings.xdebugDebugTrigger,
+        traceTrigger: settings.xdebugTraceTrigger,
+        profileTrigger: settings.xdebugProfileTrigger
+    });
+
+    updateIcon(response?.status, tab.id);
+    return { status: response?.status ?? status };
+};
+
+extensionApi.onRuntimeMessage((request) => {
     if (request.cmd !== 'setStatus') {
-        return;
+        return undefined;
     }
 
-    try {
-        const settings = await getSettings();
-        const tab = await getTab();
-        if (!tab) {
-            return;
-        }
-
-        const response = await chrome.tabs.sendMessage(tab.id, {
-            cmd: 'setStatus',
-            status: request.status,
-            debugTrigger: settings.xdebugDebugTrigger,
-            traceTrigger: settings.xdebugTraceTrigger,
-            profileTrigger: settings.xdebugProfileTrigger
-        });
-
-        updateIcon(response?.status, tab.id);
-    } catch (error) {
+    return setActiveTabStatus(request.status).catch((error) => {
         console.log('Error during setStatus:', error);
-    }
+        return { status: request.status };
+    });
 });
 
-chrome.runtime.onInstalled.addListener((details) => {
-    if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
-        chrome.runtime.setUninstallURL('https://forms.gle/XmCBqknF5BZJQhHX6');
-        chrome.commands.getAll((commands) => {
+extensionApi.onInstalled((details) => {
+    if (details.reason === 'install') {
+        extensionApi.setUninstallURL('https://forms.gle/XmCBqknF5BZJQhHX6');
+        extensionApi.commandsGetAll().then((commands) => {
             let missingShortcuts = [];
             for (let { name, shortcut } of commands) {
                 if (shortcut === '') {
@@ -145,6 +134,8 @@ chrome.runtime.onInstalled.addListener((details) => {
             if (missingShortcuts.length > 0) {
                 console.log('Missing shortcuts:', missingShortcuts);
             }
+        }).catch((error) => {
+            console.log('Error getting commands:', error);
         });
     }
 });
